@@ -173,7 +173,9 @@ Panel {
       if (code === 0) {
         root.mounted = true
         pwField.text = ""
-        if (root.openAfterUnlock && !root.screenLocked && !root.pendingLock) openFolder()
+        // Deferred: this runs inside the unlock process's exit handler, and
+        // run() refuses to start while that process still counts as running.
+        if (root.openAfterUnlock && !root.screenLocked && !root.pendingLock) Qt.callLater(root.openFolder)
       } else {
         root.errorText = message || "Unlock failed."
       }

@@ -288,7 +288,8 @@ def main(argv):
     if cmd == "open":
         if not gocryptfs_mount_at(mount):
             fail("vault is locked")
-        subprocess.Popen([XDG_OPEN, "--", mount], stdin=subprocess.DEVNULL,
+        # xdg-open rejects "--"; the mount point is absolute so it cannot read as an option.
+        subprocess.Popen([XDG_OPEN, mount], stdin=subprocess.DEVNULL,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         return
 
