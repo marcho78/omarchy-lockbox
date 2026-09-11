@@ -44,7 +44,7 @@ case "$cmd" in
       "$installed" "$exists" "$mounted" "$(json_escape "$cipher")" "$(json_escape "$mount")"
     ;;
   init)
-    [[ -x "$GOCRYPTFS" ]] || fail "gocryptfs is not installed (sudo pacman -S gocryptfs)"
+    [[ -x "$GOCRYPTFS" ]] || fail "gocryptfs is not installed (install the gocryptfs package)"
     vault_exists && fail "a vault already exists in $cipher"
     $MKDIR -p -- "$cipher" "$mount"
     $CHMOD 700 -- "$cipher"
@@ -67,7 +67,7 @@ case "$cmd" in
     fi
     ;;
   unlock)
-    [[ -x "$GOCRYPTFS" ]] || fail "gocryptfs is not installed (sudo pacman -S gocryptfs)"
+    [[ -x "$GOCRYPTFS" ]] || fail "gocryptfs is not installed (install the gocryptfs package)"
     vault_exists || fail "no vault in $cipher"
     is_mounted && exit 0
     $MKDIR -p -- "$mount"

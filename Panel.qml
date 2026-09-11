@@ -336,14 +336,14 @@ Panel {
           Text {
             width: parent.width
             wrapMode: Text.WordWrap
-            text: "Lockbox needs gocryptfs, which is in the Arch repos."
+            text: "Lockbox needs the gocryptfs package from the Arch repos. Install it as root, then reopen this panel."
             color: root.bar.foreground
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.body
           }
           Text {
             width: parent.width
-            text: "sudo pacman -S gocryptfs"
+            text: "pacman -S gocryptfs"
             color: Color.accent
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.body
@@ -351,7 +351,7 @@ Panel {
           Button {
             text: "Copy command"
             bordered: true
-            onClicked: root.copyText("sudo pacman -S gocryptfs")
+            onClicked: root.copyText("pacman -S gocryptfs")
           }
         }
 

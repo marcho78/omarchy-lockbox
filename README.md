@@ -20,8 +20,10 @@ block devices, and the encrypted folder syncs and backs up like any other.
 
 ## Install
 
+Install the `gocryptfs` package from the Arch repos as root (`pacman -S gocryptfs`),
+then add the plugin:
+
 ```bash
-sudo pacman -S gocryptfs
 omarchy plugin add https://github.com/marcho78/omarchy-lockbox.git --enable
 ```
 
