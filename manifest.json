@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "id": "marcho78.lockbox",
+  "name": "Lockbox",
+  "version": "0.1.0",
+  "author": "marcho78",
+  "license": "MIT",
+  "description": "An encrypted folder you unlock from the bar and that locks itself again. Built on gocryptfs: per-file encryption, no root, syncs like any folder.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Lockbox",
+    "description": "Encrypted vault folder: unlock, open, and lock from the bar; auto-locks on idle and screen lock.",
+    "category": "Security",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "cipherDir": "~/.lockbox",
+      "mountPoint": "~/Lockbox",
+      "autoLockMinutes": 15,
+      "lockOnScreenLock": true,
+      "openAfterUnlock": true
+    },
+    "schema": [
+      { "key": "cipherDir", "type": "path", "label": "Encrypted storage folder", "defaultValue": "~/.lockbox", "description": "Where the encrypted files live. Sync or back up this folder." },
+      { "key": "mountPoint", "type": "path", "label": "Unlocked folder", "defaultValue": "~/Lockbox", "description": "Where the decrypted view appears while unlocked." },
+      { "key": "autoLockMinutes", "type": "integer", "label": "Auto-lock after idle (minutes, 0 = never)", "min": 0, "max": 1440, "step": 1, "defaultValue": 15 },
+      { "key": "lockOnScreenLock", "type": "boolean", "label": "Lock when the screen locks", "defaultValue": true },
+      { "key": "openAfterUnlock", "type": "boolean", "label": "Open the folder after unlocking", "defaultValue": true }
+    ]
+  }
+}
