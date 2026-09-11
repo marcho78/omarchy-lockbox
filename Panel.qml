@@ -42,6 +42,9 @@ Panel {
   property string pendingPassword: ""
   property string chainPassword: ""
   property var lockService: null
+  property bool screenLocked: false
+  property bool pendingLock: false
+  readonly property int maxOutput: 4096
 
   readonly property string glyph: mounted ? "󰌿" : "󰌾"
   readonly property string stateText: !statusLoaded ? "Checking…"
@@ -87,7 +90,10 @@ Panel {
   // ---------- actions ----------
 
   function run(action, password) {
-    if (actionProc.running) return
+    if (actionProc.running) {
+      if (action === "lock") root.pendingLock = true
+      return
+    }
     root.errorText = ""
     root.busy = true
     root.pendingAction = action
@@ -96,6 +102,27 @@ Panel {
     if (action === "unlock") args.push(String(root.autoLockMinutes))
     actionProc.command = args
     actionProc.running = true
+    watchdog.restart()
+  }
+
+  // Backstop: the helper bounds every tool with its own timeout; if the
+  // helper itself hangs, end it (TERM, then KILL).
+  Timer {
+    id: watchdog
+    interval: 120000
+    repeat: false
+    onTriggered: {
+      if (!actionProc.running) return
+      console.warn("[lockbox] helper exceeded deadline; terminating")
+      actionProc.signal(15)
+      killTimer.restart()
+    }
+  }
+  Timer {
+    id: killTimer
+    interval: 5000
+    repeat: false
+    onTriggered: if (actionProc.running) actionProc.signal(9)
   }
 
   function unlock(password) {
@@ -116,9 +143,11 @@ Panel {
 
   function onActionDone(code, out, err) {
     root.busy = false
+    watchdog.stop()
     var action = root.pendingAction
     root.pendingAction = ""
-    var message = String(err || "").trim()
+    out = String(out || "").slice(0, root.maxOutput)
+    var message = String(err || "").slice(0, root.maxOutput).trim()
     if (action === "init") {
       if (code === 0) {
         root.masterKey = String(out || "").trim()
@@ -136,13 +165,17 @@ Panel {
       if (code === 0) {
         root.mounted = true
         pwField.text = ""
-        if (root.openAfterUnlock) openFolder()
+        if (root.openAfterUnlock && !root.screenLocked && !root.pendingLock) openFolder()
       } else {
         root.errorText = message || "Unlock failed."
       }
     } else if (action === "lock") {
       if (code === 0) root.mounted = false
       else root.errorText = message || "Lock failed."
+    }
+    if (root.pendingLock) {
+      root.pendingLock = false
+      if (root.mounted || action === "unlock") { run("lock"); return }
     }
     refresh()
   }
@@ -181,7 +214,7 @@ Panel {
     var shell = root.bar ? root.bar.shell : null
     if (shell && typeof shell.serviceFor === "function") {
       var s = shell.serviceFor("omarchy.lock")
-      if (s) root.lockService = s
+      if (s) { root.lockService = s; root.screenLocked = s.locked === true }
     }
   }
 
@@ -189,7 +222,13 @@ Panel {
     target: root.lockService
     ignoreUnknownSignals: true
     function onLockedChanged() {
-      if (root.lockService && root.lockService.locked && root.lockOnScreenLock && root.mounted) {
+      if (!root.lockService) return
+      root.screenLocked = root.lockService.locked === true
+      if (!root.screenLocked || !root.lockOnScreenLock) return
+      if (actionProc.running) {
+        console.log("[lockbox] screen locked during an action; vault will lock when it finishes")
+        root.pendingLock = true
+      } else if (root.mounted) {
         console.log("[lockbox] screen locked; locking vault")
         root.lock()
       }
@@ -235,7 +274,7 @@ Panel {
     function close(): void { root.close() }
     function toggle(): void { root.toggle() }
     function status(): string {
-      return JSON.stringify({ installed: root.installed, exists: root.exists, mounted: root.mounted, mountPoint: root.mountPoint, lockServiceFound: root.lockService !== null, opened: root.opened })
+      return JSON.stringify({ installed: root.installed, exists: root.exists, mounted: root.mounted, mountPoint: root.mountPoint, lockServiceFound: root.lockService !== null, screenLocked: root.screenLocked, pendingLock: root.pendingLock, opened: root.opened })
     }
     function lock(): string { root.lock(); return "locking" }
     function openFolder(): string { root.openFolder(); return "opening" }
@@ -373,6 +412,7 @@ Panel {
           TextField {
             id: newPwField
             width: parent.width
+            maximumLength: 1024
             password: true
             placeholderText: "Vault password (8+ characters)"
             onAccepted: confirmPwField.forceActiveFocus()
@@ -380,6 +420,7 @@ Panel {
           TextField {
             id: confirmPwField
             width: parent.width
+            maximumLength: 1024
             password: true
             placeholderText: "Confirm password"
             onAccepted: root.create(newPwField.text, confirmPwField.text)
@@ -433,6 +474,7 @@ Panel {
           TextField {
             id: pwField
             width: parent.width
+            maximumLength: 1024
             password: true
             placeholderText: "Vault password"
             enabled: !root.busy

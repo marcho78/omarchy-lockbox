@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "marcho78.lockbox",
   "name": "Lockbox",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "author": "marcho78",
   "license": "MIT",
   "description": "An encrypted folder you unlock from the bar and that locks itself again. Built on gocryptfs: per-file encryption, no root, syncs like any folder.",
