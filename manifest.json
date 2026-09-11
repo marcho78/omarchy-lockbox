@@ -2,11 +2,13 @@
   "schemaVersion": 1,
   "id": "marcho78.lockbox",
   "name": "Lockbox",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "marcho78",
   "license": "MIT",
   "description": "An encrypted folder you unlock from the bar and that locks itself again. Built on gocryptfs: per-file encryption, no root, syncs like any folder.",
-  "kinds": ["bar-widget"],
+  "kinds": [
+    "bar-widget"
+  ],
   "entryPoints": {
     "barWidget": "Panel.qml"
   },
@@ -24,11 +26,41 @@
       "openAfterUnlock": true
     },
     "schema": [
-      { "key": "cipherDir", "type": "path", "label": "Encrypted storage folder", "defaultValue": "~/.lockbox", "description": "Where the encrypted files live. Sync or back up this folder." },
-      { "key": "mountPoint", "type": "path", "label": "Unlocked folder", "defaultValue": "~/Lockbox", "description": "Where the decrypted view appears while unlocked." },
-      { "key": "autoLockMinutes", "type": "integer", "label": "Auto-lock after idle (minutes, 0 = never)", "min": 0, "max": 1440, "step": 1, "defaultValue": 15 },
-      { "key": "lockOnScreenLock", "type": "boolean", "label": "Lock when the screen locks", "defaultValue": true },
-      { "key": "openAfterUnlock", "type": "boolean", "label": "Open the folder after unlocking", "defaultValue": true }
+      {
+        "key": "cipherDir",
+        "type": "path",
+        "label": "Encrypted storage folder",
+        "defaultValue": "~/.lockbox",
+        "description": "Where the encrypted files live. Sync or back up this folder."
+      },
+      {
+        "key": "mountPoint",
+        "type": "path",
+        "label": "Unlocked folder",
+        "defaultValue": "~/Lockbox",
+        "description": "Where the decrypted view appears while unlocked."
+      },
+      {
+        "key": "autoLockMinutes",
+        "type": "integer",
+        "label": "Auto-lock after idle (minutes, 0 = never)",
+        "min": 0,
+        "max": 1440,
+        "step": 1,
+        "defaultValue": 15
+      },
+      {
+        "key": "lockOnScreenLock",
+        "type": "boolean",
+        "label": "Lock when the screen locks",
+        "defaultValue": true
+      },
+      {
+        "key": "openAfterUnlock",
+        "type": "boolean",
+        "label": "Open the folder after unlocking",
+        "defaultValue": true
+      }
     ]
   }
 }
