@@ -12,7 +12,9 @@
 set -euo pipefail
 
 GOCRYPTFS=/usr/bin/gocryptfs
+XRAY=/usr/bin/gocryptfs-xray
 FUSERMOUNT=/usr/bin/fusermount3
+SETSID=/usr/bin/setsid
 FINDMNT=/usr/bin/findmnt
 MKDIR=/usr/bin/mkdir
 CHMOD=/usr/bin/chmod
@@ -47,10 +49,22 @@ case "$cmd" in
     $MKDIR -p -- "$cipher" "$mount"
     $CHMOD 700 -- "$cipher"
     [[ -z "$($LS -A -- "$cipher")" ]] || fail "$cipher is not empty"
-    # -passfile /dev/stdin reads exactly one line: the password we are piped.
-    out="$($GOCRYPTFS -init -q -passfile /dev/stdin -- "$cipher" 2>&1)" || fail "gocryptfs init failed: $out"
-    key="$(printf '%s\n' "$out" | $GREP -oE '[0-9a-f]{8}(-[0-9a-f]{8}){7}' | $HEAD -n1 || true)"
-    printf '%s\n' "$key"
+    # The password arrives as one line on stdin. It is needed twice (init, then
+    # the master-key dump), so hold it in this process's memory only.
+    IFS= read -r pw || pw=""
+    [[ -n "$pw" ]] || fail "no password given"
+    out="$(printf '%s\n' "$pw" | $GOCRYPTFS -init -q -passfile /dev/stdin -- "$cipher" 2>&1)" || { pw=""; fail "gocryptfs init failed: $out"; }
+    # gocryptfs hides the master key when not on a terminal; gocryptfs-xray
+    # can derive it from the config with the password, so it is shown once.
+    key=""
+    if [[ -x "$XRAY" ]]; then
+      key="$(printf '%s\n' "$pw" | $XRAY -dumpmasterkey -- "$cipher/gocryptfs.conf" 2>/dev/null | $GREP -oE '^[0-9a-f]{64}$' | $HEAD -n1 || true)"
+    fi
+    pw=""
+    if [[ -n "$key" ]]; then
+      # Same dashed layout gocryptfs prints on a terminal.
+      printf '%s\n' "$key" | /usr/bin/sed -E 's/([0-9a-f]{8})/\1-/g; s/-$//'
+    fi
     ;;
   unlock)
     [[ -x "$GOCRYPTFS" ]] || fail "gocryptfs is not installed (sudo pacman -S gocryptfs)"
@@ -61,7 +75,10 @@ case "$cmd" in
     idle="${4:-0}"
     args=(-q -passfile /dev/stdin)
     if [[ "$idle" =~ ^[0-9]+$ ]] && (( idle > 0 )); then args+=(-idle "${idle}m"); fi
-    out="$($GOCRYPTFS "${args[@]}" -- "$cipher" "$mount" 2>&1)" || {
+    # gocryptfs forks a long-lived server after mounting. Start it in its own
+    # session so it outlives this script, the shell plugin, and omarchy-shell
+    # itself (plugin reloads would otherwise kill the mount).
+    out="$($SETSID -w $GOCRYPTFS "${args[@]}" -- "$cipher" "$mount" 2>&1)" || {
       case "$out" in
         *"Password incorrect"*|*"password incorrect"*) fail "Wrong password" ;;
         *) fail "gocryptfs: $(printf '%s' "$out" | $TR '\n' ' ')" ;;

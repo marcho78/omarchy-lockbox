@@ -38,7 +38,6 @@ Panel {
   property bool busy: false
   property string errorText: ""
   property string masterKey: ""
-  property bool creating: false
   property string pendingAction: ""
   property string pendingPassword: ""
   property string chainPassword: ""
@@ -124,7 +123,8 @@ Panel {
       if (code === 0) {
         root.masterKey = String(out || "").trim()
         root.exists = true
-        root.creating = false
+        newPwField.text = ""
+        confirmPwField.text = ""
         var pw = root.chainPassword
         root.chainPassword = ""
         if (pw) unlock(pw)
@@ -226,7 +226,6 @@ Panel {
       pwField.text = ""
       newPwField.text = ""
       confirmPwField.text = ""
-      root.creating = false
     }
   }
 
@@ -236,7 +235,7 @@ Panel {
     function close(): void { root.close() }
     function toggle(): void { root.toggle() }
     function status(): string {
-      return JSON.stringify({ installed: root.installed, exists: root.exists, mounted: root.mounted, mountPoint: root.mountPoint })
+      return JSON.stringify({ installed: root.installed, exists: root.exists, mounted: root.mounted, mountPoint: root.mountPoint, lockServiceFound: root.lockService !== null, opened: root.opened })
     }
     function lock(): string { root.lock(); return "locking" }
     function openFolder(): string { root.openFolder(); return "opening" }
@@ -371,16 +370,8 @@ Panel {
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.body
           }
-          Button {
-            visible: !root.creating
-            text: "Create vault"
-            iconText: "󰐕"
-            bordered: true
-            onClicked: { root.creating = true; root.errorText = ""; Qt.callLater(function() { newPwField.forceActiveFocus() }) }
-          }
           TextField {
             id: newPwField
-            visible: root.creating
             width: parent.width
             password: true
             placeholderText: "Vault password (8+ characters)"
@@ -388,26 +379,17 @@ Panel {
           }
           TextField {
             id: confirmPwField
-            visible: root.creating
             width: parent.width
             password: true
             placeholderText: "Confirm password"
             onAccepted: root.create(newPwField.text, confirmPwField.text)
           }
-          Row {
-            visible: root.creating
-            spacing: Style.spacing.controlGap
-            Button {
-              text: root.busy ? "Creating…" : "Create"
-              bordered: true
-              enabled: !root.busy
-              onClicked: root.create(newPwField.text, confirmPwField.text)
-            }
-            Button {
-              text: "Cancel"
-              enabled: !root.busy
-              onClicked: { root.creating = false; newPwField.text = ""; confirmPwField.text = ""; root.errorText = "" }
-            }
+          Button {
+            text: root.busy ? "Creating…" : "Create vault"
+            iconText: "󰐕"
+            bordered: true
+            enabled: !root.busy
+            onClicked: root.create(newPwField.text, confirmPwField.text)
           }
         }
 
