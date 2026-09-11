@@ -16,7 +16,10 @@ Panel {
 
   readonly property string home: Quickshell.env("HOME")
   readonly property string pluginDir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
-  readonly property string helper: pluginDir + "/bin/lockbox.sh"
+  readonly property string helper: pluginDir + "/bin/lockbox.py"
+  // The helper runs under setsid so it leads its own session and process
+  // group; the watchdog can then end the whole group, children included.
+  readonly property var helperPrefix: ["/usr/bin/setsid", "-w", "/usr/bin/python3", "-I", helper]
 
   function expand(p) {
     p = String(p || "")
@@ -80,7 +83,7 @@ Panel {
 
   Process {
     id: statusProc
-    command: ["/usr/bin/bash", root.helper, "status", root.cipherDir, root.mountPoint]
+    command: root.helperPrefix.concat(["status", root.cipherDir, root.mountPoint])
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyStatus(text)
@@ -98,7 +101,7 @@ Panel {
     root.busy = true
     root.pendingAction = action
     root.pendingPassword = password || ""
-    var args = ["/usr/bin/bash", root.helper, action, root.cipherDir, root.mountPoint]
+    var args = root.helperPrefix.concat([action, root.cipherDir, root.mountPoint])
     if (action === "unlock") args.push(String(root.autoLockMinutes))
     actionProc.command = args
     actionProc.running = true
@@ -106,15 +109,20 @@ Panel {
   }
 
   // Backstop: the helper bounds every tool with its own timeout; if the
-  // helper itself hangs, end it (TERM, then KILL).
+  // helper itself hangs, end its entire process group (TERM, then KILL).
+  function killGroup(sig) {
+    var pid = actionProc.processId
+    if (!pid) return
+    Quickshell.execDetached(["/usr/bin/kill", "-" + sig, "--", "-" + String(pid)])
+  }
   Timer {
     id: watchdog
     interval: 120000
     repeat: false
     onTriggered: {
       if (!actionProc.running) return
-      console.warn("[lockbox] helper exceeded deadline; terminating")
-      actionProc.signal(15)
+      console.warn("[lockbox] helper exceeded deadline; terminating its process group")
+      root.killGroup("TERM")
       killTimer.restart()
     }
   }
@@ -122,7 +130,7 @@ Panel {
     id: killTimer
     interval: 5000
     repeat: false
-    onTriggered: if (actionProc.running) actionProc.signal(9)
+    onTriggered: if (actionProc.running) root.killGroup("KILL")
   }
 
   function unlock(password) {

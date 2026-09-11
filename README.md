@@ -80,6 +80,14 @@ it the data cannot be recovered even with the password.
 The master key shown at creation opens the vault without the password. Treat
 it like the password itself and keep it offline.
 
+The helper that talks to gocryptfs walks both folder paths component by
+component without following symlinks, verifies ownership and permissions on
+the open descriptors, and hands descriptors rather than paths to gocryptfs
+wherever the tool allows it. The mount itself needs a pathname because
+`fusermount3` is a separate setuid program, so the path is taken from the
+verified descriptor at the last moment and the resulting mount is checked
+against `/proc/self/mountinfo` and undone if it landed anywhere else.
+
 ## Troubleshooting
 
 * **"Something is still using the folder."** gocryptfs refuses to unmount while
@@ -115,8 +123,9 @@ unmounts it.
 
 * `gocryptfs` and `fuse3` from the Arch repos. Install gocryptfs yourself; the
   plugin never installs anything.
-* `util-linux` for `findmnt` and `setsid`, `xdg-utils` for opening the folder,
-  `wl-clipboard` for the copy buttons. All ship with Omarchy.
+* `python` (used by Omarchy itself), `util-linux` for `setsid`, `xdg-utils`
+  for opening the folder, `wl-clipboard` for the copy buttons. All ship with
+  Omarchy.
 
 The plugin makes no network requests and writes only to the two folders you
 configure. Every tool is called by absolute path.
