@@ -81,12 +81,43 @@ Panel {
     }
   }
 
+  // Output from the helper is read in chunks against a byte budget. Exceeding
+  // it ends the helper's whole process group at once; nothing beyond the
+  // budget is ever held in the shell.
+  function collect(proc, which, chunk) {
+    var s = String(chunk)
+    var cur = which === "out" ? proc.outBuf : proc.errBuf
+    var room = root.maxOutput - cur.length
+    if (s.length > room) {
+      if (which === "out") proc.outBuf = cur + s.slice(0, Math.max(0, room)); else proc.errBuf = cur + s.slice(0, Math.max(0, room))
+      if (!proc.overflowed) {
+        proc.overflowed = true
+        console.warn("[lockbox] helper output exceeded " + root.maxOutput + " bytes; killing its process group")
+        root.killGroupOf(proc, "KILL")
+      }
+      return
+    }
+    if (which === "out") proc.outBuf = cur + s; else proc.errBuf = cur + s
+  }
+
+  function killGroupOf(proc, sig) {
+    var pid = proc.processId
+    if (!pid) return
+    Quickshell.execDetached(["/usr/bin/kill", "-" + sig, "--", "-" + String(pid)])
+  }
+
   Process {
     id: statusProc
+    property string outBuf: ""
+    property string errBuf: ""
+    property bool overflowed: false
     command: root.helperPrefix.concat(["status", root.cipherDir, root.mountPoint])
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: root.applyStatus(text)
+    onStarted: { outBuf = ""; errBuf = ""; overflowed = false }
+    stdout: SplitParser { splitMarker: ""; onRead: function(d) { root.collect(statusProc, "out", d) } }
+    stderr: SplitParser { splitMarker: ""; onRead: function(d) { root.collect(statusProc, "err", d) } }
+    onExited: function(code) {
+      if (!statusProc.overflowed && code === 0) root.applyStatus(statusProc.outBuf)
+      statusProc.outBuf = ""; statusProc.errBuf = ""
     }
   }
 
@@ -110,11 +141,7 @@ Panel {
 
   // Backstop: the helper bounds every tool with its own timeout; if the
   // helper itself hangs, end its entire process group (TERM, then KILL).
-  function killGroup(sig) {
-    var pid = actionProc.processId
-    if (!pid) return
-    Quickshell.execDetached(["/usr/bin/kill", "-" + sig, "--", "-" + String(pid)])
-  }
+  function killGroup(sig) { root.killGroupOf(actionProc, sig) }
   Timer {
     id: watchdog
     interval: 120000
@@ -193,15 +220,24 @@ Panel {
   Process {
     id: actionProc
     stdinEnabled: true
-    stdout: StdioCollector { id: actionOut; waitForEnd: true }
-    stderr: StdioCollector { id: actionErr; waitForEnd: true }
+    property string outBuf: ""
+    property string errBuf: ""
+    property bool overflowed: false
+    stdout: SplitParser { splitMarker: ""; onRead: function(d) { root.collect(actionProc, "out", d) } }
+    stderr: SplitParser { splitMarker: ""; onRead: function(d) { root.collect(actionProc, "err", d) } }
     onStarted: {
+      actionProc.outBuf = ""; actionProc.errBuf = ""; actionProc.overflowed = false
       if (root.pendingPassword !== "") {
         actionProc.write(root.pendingPassword + "\n")
         root.pendingPassword = ""
       }
     }
-    onExited: function(code) { root.onActionDone(code, actionOut.text, actionErr.text) }
+    onExited: function(code) {
+      var o = actionProc.outBuf, e = actionProc.overflowed ? "The helper produced too much output and was stopped." : actionProc.errBuf
+      actionProc.outBuf = ""; actionProc.errBuf = ""
+      root.onActionDone(actionProc.overflowed ? 1 : code, o, e)
+      actionProc.overflowed = false
+    }
   }
 
   Process {

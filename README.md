@@ -83,10 +83,22 @@ it like the password itself and keep it offline.
 The helper that talks to gocryptfs walks both folder paths component by
 component without following symlinks, verifies ownership and permissions on
 the open descriptors, and hands descriptors rather than paths to gocryptfs
-wherever the tool allows it. The mount itself needs a pathname because
-`fusermount3` is a separate setuid program, so the path is taken from the
-verified descriptor at the last moment and the resulting mount is checked
-against `/proc/self/mountinfo` and undone if it landed anywhere else.
+wherever the tool allows it.
+
+Whether the vault is mounted is never decided from a path string. The helper
+opens the mount point through its verified parent descriptor, reads that
+descriptor's kernel mount id, and checks that the mount table lists that id
+as a gocryptfs mount. To unlock, gocryptfs is started in the foreground as a
+process the helper owns, records in `$XDG_RUNTIME_DIR/lockbox` by pid and
+start time, and then verifies by mount id; if the mount is not attached to
+the verified folder the process is killed, which removes the mount. To lock,
+the recorded process is validated and signalled; gocryptfs unmounts itself.
+No path is resolved again for either step. If the folder is busy, nothing
+else is touched and you get a message.
+
+Everything the helper prints, and everything the tools print to the helper,
+is read against a fixed byte budget as it arrives; exceeding it or a deadline
+ends that process group immediately.
 
 ## Troubleshooting
 
@@ -125,7 +137,8 @@ unmounts it.
   plugin never installs anything.
 * `python` (used by Omarchy itself), `util-linux` for `setsid`, `xdg-utils`
   for opening the folder, `wl-clipboard` for the copy buttons. All ship with
-  Omarchy.
+  Omarchy. Unlocking needs a private `$XDG_RUNTIME_DIR`, which every login
+  session has.
 
 The plugin makes no network requests and writes only to the two folders you
 configure. Every tool is called by absolute path.
