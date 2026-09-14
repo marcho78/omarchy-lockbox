@@ -25,10 +25,25 @@ Identity model
     the answer to the directory identity reached through the verified chain.
   * Mounting: gocryptfs runs in the foreground (-fg) as a process this helper
     starts and records (pid + kernel start time) in $XDG_RUNTIME_DIR/lockbox.
-    fusermount3 is setuid and needs a pathname, so gocryptfs receives the
-    name read from the verified descriptor; the result is then verified by
-    mount identity as above, and if the mount is not attached to the verified
-    directory the daemon is killed, which tears the mount down. Fail closed.
+    fusermount3 is setuid and resolves a textual pathname by design; an
+    unprivileged process has no fd-based mount call outside a user namespace,
+    where the mount would be invisible to the session. So the one pathname
+    crossing is guarded instead of trusted:
+      - inotify watches are installed through the retained descriptors on the
+        mount point's parent (create/delete/move/attrib) and on the mount
+        point itself (move-self/delete-self) before the final verification;
+        every unprivileged way to change what "parent/name" resolves to
+        (rename, exchange, delete+create, chmod) is an event on one of them,
+        and a queue overflow counts as an event;
+      - after gocryptfs reports the mount, the result is checked by kernel
+        mount identity: the mount reached through parent_fd/name must be
+        fuse.gocryptfs and its parent mount id must be the parent directory's
+        own mount id (so nothing was stacked underneath), and its ".." must be
+        the retained parent inode;
+      - if any watch fired, or the topology check fails, or gocryptfs exits,
+        the daemon is killed, which removes whatever it mounted. Fail closed.
+    With no event on the watches, "name" still denotes the directory that was
+    verified through the retained descriptor, so the mount is on that object.
   * Unmounting never resolves a pathname: the recorded daemon is validated by
     pid, start time and executable, then signalled; gocryptfs unmounts itself
     on SIGTERM. If the folder is busy nothing else is touched.
@@ -43,6 +58,7 @@ Process model
     and never written anywhere.
 """
 
+import ctypes
 import errno
 import json
 import os
@@ -50,6 +66,7 @@ import secrets
 import select
 import signal
 import stat
+import struct
 import subprocess
 import sys
 import time
@@ -220,21 +237,126 @@ def mountinfo_fstype(mount_id):
     return None
 
 
+def mountinfo_entry(mount_id):
+    """(fstype, parent_id) recorded in /proc/self/mountinfo for a mount id."""
+    try:
+        with open("/proc/self/mountinfo", "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                fields = line.split()
+                if len(fields) < 10 or "-" not in fields:
+                    continue
+                try:
+                    if int(fields[0]) != mount_id:
+                        continue
+                    parent = int(fields[1])
+                except ValueError:
+                    continue
+                sep = fields.index("-")
+                return (fields[sep + 1] if sep + 1 < len(fields) else ""), parent
+    except OSError:
+        pass
+    return None, None
+
+
 def gocryptfs_mount_via(parent_fd, name):
     """(mounted, mount_id): open the mount point through its verified parent
     (lookup follows the mount, so this reaches the mounted root if there is
-    one) and check that its mount is fuse.gocryptfs."""
+    one) and check by kernel mount identity that what sits there is a
+    fuse.gocryptfs mount attached directly to the parent directory's mount
+    (nothing stacked underneath) whose ".." is the retained parent inode."""
     try:
         fd = os.open(name, DIR_FLAGS, dir_fd=parent_fd)
     except OSError:
         return False, None
     try:
         mid = mount_id_of(fd)
+        pmid = mount_id_of(parent_fd)
+        if mid is None or pmid is None or mid == pmid:
+            return False, None
+        fstype, parent_mid = mountinfo_entry(mid)
+        if fstype != "fuse.gocryptfs" or parent_mid != pmid:
+            return False, mid
+        try:
+            up = os.stat("..", dir_fd=fd)
+            here = os.fstat(parent_fd)
+            if (up.st_dev, up.st_ino) != (here.st_dev, here.st_ino):
+                return False, mid
+        except OSError:
+            return False, mid
+        return True, mid
     finally:
         os.close(fd)
-    if mid is None:
-        return False, None
-    return mountinfo_fstype(mid) == "fuse.gocryptfs", mid
+
+
+def foreign_mount_on(parent_fd, name):
+    """True if something other than the parent's own filesystem is mounted on
+    parent/name (a stacked mount that is not ours)."""
+    try:
+        fd = os.open(name, DIR_FLAGS, dir_fd=parent_fd)
+    except OSError:
+        return False
+    try:
+        return mount_id_of(fd) != mount_id_of(parent_fd)
+    finally:
+        os.close(fd)
+
+
+# ---------- inotify guard for the one pathname crossing ----------
+
+IN_ATTRIB = 0x00000004
+IN_MOVED_FROM = 0x00000040
+IN_MOVED_TO = 0x00000080
+IN_CREATE = 0x00000100
+IN_DELETE = 0x00000200
+IN_DELETE_SELF = 0x00000400
+IN_MOVE_SELF = 0x00000800
+IN_Q_OVERFLOW = 0x00004000
+IN_IGNORED = 0x00008000
+IN_NONBLOCK = 0o4000
+IN_CLOEXEC = 0o2000000
+_libc = ctypes.CDLL(None, use_errno=True)
+
+
+class ChangeGuard:
+    """Watches the mount point's parent directory and the mount point itself
+    through their retained descriptors. events() returns what happened since
+    the guard was armed; any entry means the name binding may have changed."""
+
+    def __init__(self, parent_fd, dir_fd):
+        self.fd = _libc.inotify_init1(IN_NONBLOCK | IN_CLOEXEC)
+        if self.fd < 0:
+            fail("inotify is unavailable: " + os.strerror(ctypes.get_errno()))
+        parent_mask = IN_MOVED_FROM | IN_MOVED_TO | IN_CREATE | IN_DELETE | IN_ATTRIB | IN_DELETE_SELF | IN_MOVE_SELF
+        self_mask = IN_MOVE_SELF | IN_DELETE_SELF | IN_ATTRIB
+        self.w_parent = _libc.inotify_add_watch(self.fd, fd_path(parent_fd).encode(), parent_mask)
+        self.w_self = _libc.inotify_add_watch(self.fd, fd_path(dir_fd).encode(), self_mask)
+        if self.w_parent < 0 or self.w_self < 0:
+            fail("could not watch the mount point: " + os.strerror(ctypes.get_errno()))
+
+    def events(self):
+        out = []
+        while True:
+            ready, _, _ = select.select([self.fd], [], [], 0)
+            if not ready:
+                return out
+            try:
+                buf = os.read(self.fd, 65536)
+            except BlockingIOError:
+                return out
+            off = 0
+            while off + 16 <= len(buf):
+                wd, mask, _cookie, ln = struct.unpack_from("iIII", buf, off)
+                name = buf[off + 16:off + 16 + ln].rstrip(b"\0").decode("utf-8", "replace")
+                off += 16 + ln
+                if mask & IN_IGNORED:
+                    continue
+                out.append((wd, mask, name))
+
+    def close(self):
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
 
 
 # ---------- daemon record ----------
@@ -561,10 +683,24 @@ def cmd_unlock(cipher, mount, home, idle):
     mounted, _ = gocryptfs_mount_via(pfd, name)
     if mounted:
         return
-    mfd = open_last(pfd, name, mount, create=True)
+    if foreign_mount_on(pfd, name):
+        fail(f"something else is mounted on {mount}; refusing")
+    # Create the directory if needed *before* arming the guard, then arm it
+    # and re-verify everything through fresh descriptors, so that from here
+    # until the mount is checked, no change to the name binding goes unseen.
+    mfd0 = open_last(pfd, name, mount, create=True)
+    os.close(mfd0)
+    guard = ChangeGuard(pfd, pfd)   # parent watch first; self watch re-added below
+    mfd = open_last(pfd, name, mount, create=False)
+    if mfd is None:
+        fail(f"{mount} vanished during validation")
+    guard.close()
+    guard = ChangeGuard(pfd, mfd)
     require_private(mfd, mount)
     if listdir_fd(mfd):
         fail(f"{mount} is not empty")
+    if mount_id_of(mfd) != mount_id_of(pfd):
+        fail(f"{mount} is a mount point already; refusing")
     rfd = runtime_dir()
     if rfd is None:
         fail("no private runtime directory (XDG_RUNTIME_DIR) to record the mount in")
@@ -572,11 +708,14 @@ def cmd_unlock(cipher, mount, home, idle):
     if idle.isdigit() and int(idle) > 0:
         args += ["-idle", f"{int(idle)}m"]
     pw = read_password()
-    # fusermount3 is setuid and needs a pathname: take it from the verified
-    # descriptor now; the outcome is checked by mount identity below.
+    # fusermount3 is setuid and resolves a textual pathname; the guard above
+    # detects any change to what that name denotes, and the topology check
+    # below proves where the mount landed.
     mount_path = fd_realpath(mfd)
     if mount_path != mount:
         fail("mount point moved during validation; refusing")
+    if guard.events():
+        fail("the mount point changed during validation; refusing")
     try:
         daemon = subprocess.Popen(
             [GOCRYPTFS] + args + ["--", fd_path(cfd), mount_path],
@@ -591,6 +730,17 @@ def cmd_unlock(cipher, mount, home, idle):
     except OSError:
         pass
     pw = b""
+    def roll_back(msg):
+        try:
+            daemon.terminate()
+            daemon.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            try:
+                daemon.kill()
+            except OSError:
+                pass
+        fail(msg)
+
     deadline = time.monotonic() + T_UNLOCK
     while time.monotonic() < deadline:
         rc = daemon.poll()
@@ -600,20 +750,21 @@ def cmd_unlock(cipher, mount, home, idle):
             fail(f"gocryptfs exited with code {rc}")
         mounted, mid = gocryptfs_mount_via(pfd, name)
         if mounted:
-            # Bind the record to this exact process and mount identity.
+            events = guard.events()
+            guard.close()
+            if events:
+                roll_back("the mount point changed while unlocking; rolled back")
+            # No change to the name binding since verification and the mount
+            # hangs directly off the retained parent: it is on the verified
+            # directory. Bind the record to this process and mount identity.
             write_record(rfd, mid, daemon.pid)
             return
+        if mid is not None:
+            # Something mounted at the name that is not a gocryptfs mount on
+            # the retained parent.
+            roll_back("a different mount appeared on the folder; rolled back")
         time.sleep(0.1)
-    # Nothing attached to the verified directory in time: fail closed.
-    try:
-        daemon.terminate()
-        daemon.wait(timeout=5)
-    except (OSError, subprocess.TimeoutExpired):
-        try:
-            daemon.kill()
-        except OSError:
-            pass
-    fail("the vault did not mount on the verified folder; rolled back")
+    roll_back("the vault did not mount on the verified folder; rolled back")
 
 
 def main(argv):

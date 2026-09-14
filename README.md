@@ -96,6 +96,8 @@ the recorded process is validated and signalled; gocryptfs unmounts itself.
 No path is resolved again for either step. If the folder is busy, nothing
 else is touched and you get a message.
 
+The one textual pathname `fusermount3` requires is guarded, not trusted: inotify watches are armed through the retained parent and mount-point descriptors before the mount, so any rename, exchange, delete, or chmod of what the name denotes is seen; after the mount, its kernel mount id must be a `fuse.gocryptfs` mount whose parent mount is the parent directory's own and whose `..` is the retained parent inode. Any watch event or failed check kills the daemon and rolls back.
+
 Everything the helper prints, and everything the tools print to the helper,
 is read against a fixed byte budget as it arrives; exceeding it or a deadline
 ends that process group immediately.
